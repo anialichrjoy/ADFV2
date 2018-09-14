@@ -1,0 +1,308 @@
+{
+    "$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "factoryName": {
+            "type": "string",
+            "metadata": "Data Factory Name",
+            "defaultValue": "HUBAnalytics"
+        },
+        "AzureSqlDW_connectionString": {
+            "type": "secureString",
+            "metadata": "Secure string for 'connectionString' of 'AzureSqlDW'"
+        },
+        "AzureSqlDatabase_connectionString": {
+            "type": "secureString",
+            "metadata": "Secure string for 'connectionString' of 'AzureSqlDatabase'"
+        },
+        "AzureBLOBStorage_connectionString": {
+            "type": "secureString",
+            "metadata": "Secure string for 'connectionString' of 'AzureBLOBStorage'"
+        }
+    },
+    "variables": {
+        "factoryId": "[concat('Microsoft.DataFactory/factories/', parameters('factoryName'))]"
+    },
+    "resources": [
+        {
+            "name": "[concat(parameters('factoryName'), '/EUClaimDataValidation')]",
+            "type": "Microsoft.DataFactory/factories/pipelines",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "activities": [
+                    {
+                        "name": "RefreshSNKDataset",
+                        "type": "Copy",
+                        "dependsOn": [
+                            {
+                                "activity": "RefreshSRCDataset",
+                                "dependencyConditions": [
+                                    "Succeeded"
+                                ]
+                            }
+                        ],
+                        "policy": {
+                            "timeout": "7.00:00:00",
+                            "retry": 0,
+                            "retryIntervalInSeconds": 30,
+                            "secureOutput": false,
+                            "secureInput": false
+                        },
+                        "userProperties": [],
+                        "typeProperties": {
+                            "source": {
+                                "type": "SqlSource",
+                                "sqlReaderQuery": "SELECT [UniqClaim], [Client Lookup], [Claim Number], [Claim Added By], [Claim Type], [Claim Added Date], [Attribute], [Validation Result], [EtlInsertDateTime], [Loaduser]\nFROM [WORKRPT].[EUClaimDataValidation]"
+                            },
+                            "sink": {
+                                "type": "SqlDWSink",
+                                "allowPolyBase": false,
+                                "writeBatchSize": 100000,
+                                "preCopyScript": "TRUNCATE TABLE [RPT].[EUClaimDataValidation]"
+                            },
+                            "enableStaging": false,
+                            "enableSkipIncompatibleRow": true,
+                            "redirectIncompatibleRowSettings": {
+                                "linkedServiceName": {
+                                    "referenceName": "AzureBLOBStorage",
+                                    "type": "LinkedServiceReference"
+                                },
+                                "path": "aascontainer"
+                            },
+                            "dataIntegrationUnits": 0,
+                            "translator": {
+                                "type": "TabularTranslator",
+                                "columnMappings": {
+                                    "UniqClaim": "UniqClaim",
+                                    "Client Lookup": "Client Lookup",
+                                    "Claim Number": "Claim Number",
+                                    "Claim Added By": "Claim Added By",
+                                    "Claim Type": "Claim Type",
+                                    "Claim Added Date": "Claim Added Date",
+                                    "Attribute": "Attribute",
+                                    "Validation Result": "Validation Result",
+                                    "EtlInsertDateTime": "EtlInsertDateTime",
+                                    "Loaduser": "Loaduser"
+                                }
+                            }
+                        },
+                        "inputs": [
+                            {
+                                "referenceName": "SRC_EU_ClaimDataValidation",
+                                "type": "DatasetReference",
+                                "parameters": {}
+                            }
+                        ],
+                        "outputs": [
+                            {
+                                "referenceName": "SNK_EU_ClaimDataValidation",
+                                "type": "DatasetReference",
+                                "parameters": {}
+                            }
+                        ]
+                    },
+                    {
+                        "name": "RefreshSRCDataset",
+                        "type": "SqlServerStoredProcedure",
+                        "dependsOn": [],
+                        "policy": {
+                            "timeout": "7.00:00:00",
+                            "retry": 0,
+                            "retryIntervalInSeconds": 30,
+                            "secureOutput": false,
+                            "secureInput": false
+                        },
+                        "userProperties": [],
+                        "typeProperties": {
+                            "storedProcedureName": "[concat('[', 'WORKRPT].[spEUClaimDataValidation]')]",
+                            "storedProcedureParameters": {
+                                "RUNTIME": {
+                                    "value": "0",
+                                    "type": "Int32"
+                                },
+                                "TGT_REC_CNT": {
+                                    "value": "0",
+                                    "type": "Int32"
+                                }
+                            }
+                        },
+                        "linkedServiceName": {
+                            "referenceName": "AzureSqlDatabase",
+                            "type": "LinkedServiceReference"
+                        }
+                    }
+                ],
+                "annotations": []
+            },
+            "dependsOn": [
+                "[concat(variables('factoryId'), '/datasets/SRC_EU_ClaimDataValidation')]",
+                "[concat(variables('factoryId'), '/datasets/SNK_EU_ClaimDataValidation')]",
+                "[concat(variables('factoryId'), '/linkedServices/AzureSqlDatabase')]",
+                "[concat(variables('factoryId'), '/linkedServices/AzureBLOBStorage')]"
+            ]
+        },
+        {
+            "name": "[concat(parameters('factoryName'), '/SRC_EU_ClaimDataValidation')]",
+            "type": "Microsoft.DataFactory/factories/datasets",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "linkedServiceName": {
+                    "referenceName": "AzureSqlDatabase",
+                    "type": "LinkedServiceReference"
+                },
+                "annotations": [],
+                "type": "AzureSqlTable",
+                "structure": [
+                    {
+                        "name": "UniqClaim",
+                        "type": "Int32"
+                    },
+                    {
+                        "name": "Client Lookup",
+                        "type": "String"
+                    },
+                    {
+                        "name": "Claim Number",
+                        "type": "Int32"
+                    },
+                    {
+                        "name": "Claim Added By",
+                        "type": "String"
+                    },
+                    {
+                        "name": "Claim Type",
+                        "type": "String"
+                    },
+                    {
+                        "name": "Claim Added Date",
+                        "type": "String"
+                    },
+                    {
+                        "name": "Attribute",
+                        "type": "String"
+                    },
+                    {
+                        "name": "Validation Result",
+                        "type": "String"
+                    },
+                    {
+                        "name": "EtlInsertDateTime",
+                        "type": "DateTime"
+                    },
+                    {
+                        "name": "Loaduser",
+                        "type": "String"
+                    }
+                ],
+                "typeProperties": {
+                    "tableName": "[concat('[', 'WORKRPT].[EUClaimDataValidation]')]"
+                }
+            },
+            "dependsOn": [
+                "[concat(variables('factoryId'), '/linkedServices/AzureSqlDatabase')]"
+            ]
+        },
+        {
+            "name": "[concat(parameters('factoryName'), '/SNK_EU_ClaimDataValidation')]",
+            "type": "Microsoft.DataFactory/factories/datasets",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "linkedServiceName": {
+                    "referenceName": "AzureSqlDW",
+                    "type": "LinkedServiceReference"
+                },
+                "annotations": [],
+                "type": "AzureSqlDWTable",
+                "structure": [
+                    {
+                        "name": "UniqClaim",
+                        "type": "Int32"
+                    },
+                    {
+                        "name": "Client Lookup",
+                        "type": "String"
+                    },
+                    {
+                        "name": "Claim Number",
+                        "type": "Int32"
+                    },
+                    {
+                        "name": "Claim Added By",
+                        "type": "String"
+                    },
+                    {
+                        "name": "Claim Type",
+                        "type": "String"
+                    },
+                    {
+                        "name": "Claim Added Date",
+                        "type": "String"
+                    },
+                    {
+                        "name": "Attribute",
+                        "type": "String"
+                    },
+                    {
+                        "name": "Validation Result",
+                        "type": "String"
+                    },
+                    {
+                        "name": "EtlInsertDateTime",
+                        "type": "DateTime"
+                    },
+                    {
+                        "name": "Loaduser",
+                        "type": "String"
+                    }
+                ],
+                "typeProperties": {
+                    "tableName": "[concat('[', 'RPT].[EUClaimDataValidation]')]"
+                }
+            },
+            "dependsOn": [
+                "[concat(variables('factoryId'), '/linkedServices/AzureSqlDW')]"
+            ]
+        },
+        {
+            "name": "[concat(parameters('factoryName'), '/AzureSqlDW')]",
+            "type": "Microsoft.DataFactory/factories/linkedServices",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "description": "LinkedService to Azure SQL DWH database e.g. adcv-sqlp-dwd01.database.windows.net.hubdatawarehouse01",
+                "annotations": [],
+                "type": "AzureSqlDW",
+                "typeProperties": {
+                    "connectionString": "[parameters('AzureSqlDW_connectionString')]"
+                }
+            },
+            "dependsOn": []
+        },
+        {
+            "name": "[concat(parameters('factoryName'), '/AzureSqlDatabase')]",
+            "type": "Microsoft.DataFactory/factories/linkedServices",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "description": "Linked service to Azure SQL database e.g. adcv-sqlp-dwd01.database.windows.net.OPSSTG",
+                "annotations": [],
+                "type": "AzureSqlDatabase",
+                "typeProperties": {
+                    "connectionString": "[parameters('AzureSqlDatabase_connectionString')]"
+                }
+            },
+            "dependsOn": []
+        },
+        {
+            "name": "[concat(parameters('factoryName'), '/AzureBLOBStorage')]",
+            "type": "Microsoft.DataFactory/factories/linkedServices",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "annotations": [],
+                "type": "AzureBlobStorage",
+                "typeProperties": {
+                    "connectionString": "[parameters('AzureBLOBStorage_connectionString')]"
+                }
+            },
+            "dependsOn": []
+        }
+    ]
+}
