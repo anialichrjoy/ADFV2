@@ -1,0 +1,607 @@
+{
+    "$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "factoryName": {
+            "type": "string",
+            "metadata": "Data Factory Name",
+            "defaultValue": "DnAPOC"
+        },
+        "SqlServerLinkedService_connectionString": {
+            "type": "secureString",
+            "metadata": "Secure string for 'connectionString' of 'SqlServerLinkedService'"
+        },
+        "AzureSqlDatabaseLinkedService_connectionString": {
+            "type": "secureString",
+            "metadata": "Secure string for 'connectionString' of 'AzureSqlDatabaseLinkedService'"
+        },
+        "AzureBlobStorageLinkedService_connectionString": {
+            "type": "secureString",
+            "metadata": "Secure string for 'connectionString' of 'AzureBlobStorageLinkedService'"
+        }
+    },
+    "variables": {
+        "factoryId": "[concat('Microsoft.DataFactory/factories/', parameters('factoryName'))]"
+    },
+    "resources": [
+        {
+            "name": "[concat(parameters('factoryName'), '/IncrementalCopyPipeline')]",
+            "type": "Microsoft.DataFactory/factories/pipelines",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "activities": [
+                    {
+                        "name": "IterateSQLTables",
+                        "type": "ForEach",
+                        "dependsOn": [],
+                        "userProperties": [],
+                        "typeProperties": {
+                            "items": {
+                                "value": "@pipeline().parameters.tableList",
+                                "type": "Expression"
+                            },
+                            "activities": [
+                                {
+                                    "name": "LookupOldWaterMarkActivity",
+                                    "type": "Lookup",
+                                    "dependsOn": [],
+                                    "policy": {
+                                        "timeout": "7.00:00:00",
+                                        "retry": 0,
+                                        "retryIntervalInSeconds": 30,
+                                        "secureOutput": false,
+                                        "secureInput": false
+                                    },
+                                    "userProperties": [],
+                                    "typeProperties": {
+                                        "source": {
+                                            "type": "SqlSource",
+                                            "sqlReaderQuery": {
+                                                "value": "select * from SYSTEM.WaterMarkTable where TableName  =  '@{item().TABLE_NAME}'",
+                                                "type": "Expression"
+                                            }
+                                        },
+                                        "dataset": {
+                                            "referenceName": "REF_IncrementalWaterMarkDataset",
+                                            "type": "DatasetReference",
+                                            "parameters": {}
+                                        }
+                                    }
+                                },
+                                {
+                                    "name": "LookupNewWaterMarkActivity",
+                                    "type": "Lookup",
+                                    "dependsOn": [],
+                                    "policy": {
+                                        "timeout": "7.00:00:00",
+                                        "retry": 0,
+                                        "retryIntervalInSeconds": 30,
+                                        "secureOutput": false,
+                                        "secureInput": false
+                                    },
+                                    "userProperties": [],
+                                    "typeProperties": {
+                                        "source": {
+                                            "type": "SqlSource",
+                                            "sqlReaderQuery": {
+                                                "value": "select MAX(@{item().WaterMark_Column}) as NewWatermarkvalue from @{item().TABLE_NAME}",
+                                                "type": "Expression"
+                                            }
+                                        },
+                                        "dataset": {
+                                            "referenceName": "SRC_SQLServerSourceDataset",
+                                            "type": "DatasetReference",
+                                            "parameters": {}
+                                        }
+                                    }
+                                },
+                                {
+                                    "name": "IncrementalCopyActivity",
+                                    "type": "Copy",
+                                    "dependsOn": [
+                                        {
+                                            "activity": "LookupOldWaterMarkActivity",
+                                            "dependencyConditions": [
+                                                "Succeeded"
+                                            ]
+                                        },
+                                        {
+                                            "activity": "LookupNewWaterMarkActivity",
+                                            "dependencyConditions": [
+                                                "Succeeded"
+                                            ]
+                                        }
+                                    ],
+                                    "policy": {
+                                        "timeout": "7.00:00:00",
+                                        "retry": 0,
+                                        "retryIntervalInSeconds": 30,
+                                        "secureOutput": false,
+                                        "secureInput": false
+                                    },
+                                    "userProperties": [],
+                                    "typeProperties": {
+                                        "source": {
+                                            "type": "SqlSource",
+                                            "sqlReaderQuery": {
+                                                "value": "select * from @{item().TABLE_NAME} where @{item().WaterMark_Column} > '@{activity('LookupOldWaterMarkActivity').output.firstRow.WatermarkValue}' and @{item().WaterMark_Column} <= '@{activity('LookupNewWaterMarkActivity').output.firstRow.NewWatermarkvalue}'",
+                                                "type": "Expression"
+                                            }
+                                        },
+                                        "sink": {
+                                            "type": "SqlSink",
+                                            "writeBatchSize": 10000,
+                                            "sqlWriterStoredProcedureName": {
+                                                "value": "@{item().StoredProcedureNameForMergeOperation}",
+                                                "type": "Expression"
+                                            },
+                                            "sqlWriterTableType": {
+                                                "value": "@{item().TableType}",
+                                                "type": "Expression"
+                                            }
+                                        },
+                                        "enableStaging": true,
+                                        "stagingSettings": {
+                                            "linkedServiceName": {
+                                                "referenceName": "AzureBlobStorageLinkedService",
+                                                "type": "LinkedServiceReference"
+                                            },
+                                            "path": "epic",
+                                            "enableCompression": true
+                                        },
+                                        "enableSkipIncompatibleRow": true,
+                                        "redirectIncompatibleRowSettings": {
+                                            "linkedServiceName": {
+                                                "referenceName": "AzureBlobStorageLinkedService",
+                                                "type": "LinkedServiceReference"
+                                            },
+                                            "path": "epic"
+                                        },
+                                        "dataIntegrationUnits": 0
+                                    },
+                                    "inputs": [
+                                        {
+                                            "referenceName": "SRC_SQLServerSourceDataset",
+                                            "type": "DatasetReference",
+                                            "parameters": {}
+                                        }
+                                    ],
+                                    "outputs": [
+                                        {
+                                            "referenceName": "SNK_AzureSQLIncrementalSinkDataset",
+                                            "type": "DatasetReference",
+                                            "parameters": {
+                                                "SinkTableName": "@{item().TABLE_NAME}"
+                                            }
+                                        }
+                                    ]
+                                },
+                                {
+                                    "name": "StoredProceduretoWriteWatermarkActivity",
+                                    "type": "SqlServerStoredProcedure",
+                                    "dependsOn": [
+                                        {
+                                            "activity": "IncrementalCopyActivity",
+                                            "dependencyConditions": [
+                                                "Succeeded"
+                                            ]
+                                        }
+                                    ],
+                                    "policy": {
+                                        "timeout": "7.00:00:00",
+                                        "retry": 0,
+                                        "retryIntervalInSeconds": 30,
+                                        "secureOutput": false,
+                                        "secureInput": false
+                                    },
+                                    "userProperties": [],
+                                    "typeProperties": {
+                                        "storedProcedureName": "[concat('[', 'SYSTEM].[WriteWatermark]')]",
+                                        "storedProcedureParameters": {
+                                            "LastModifiedtime": {
+                                                "value": {
+                                                    "value": "@{activity('LookupNewWaterMarkActivity').output.firstRow.NewWatermarkvalue}",
+                                                    "type": "Expression"
+                                                },
+                                                "type": "DateTime"
+                                            },
+                                            "TableName": {
+                                                "value": {
+                                                    "value": "@{activity('LookupOldWaterMarkActivity').output.firstRow.TableName}",
+                                                    "type": "Expression"
+                                                },
+                                                "type": "String"
+                                            }
+                                        }
+                                    },
+                                    "linkedServiceName": {
+                                        "referenceName": "AzureSqlDatabaseLinkedService",
+                                        "type": "LinkedServiceReference"
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ],
+                "parameters": {
+                    "tableList": {
+                        "type": "Object",
+                        "defaultValue": [
+                            {
+                                "TABLE_NAME": "Claim",
+                                "WaterMark_Column": "UpdatedDate",
+                                "TableType": "Claim",
+                                "StoredProcedureNameForMergeOperation": "EU.UpsertClaim"
+                            },
+                            {
+                                "TABLE_NAME": "Policy",
+                                "WaterMark_Column": "UpdatedDate",
+                                "TableType": "Policy",
+                                "StoredProcedureNameForMergeOperation": "EU.UpsertPolicy"
+                            }
+                        ]
+                    }
+                },
+                "folder": {
+                    "name": "Incremental"
+                },
+                "annotations": []
+            },
+            "dependsOn": [
+                "[concat(variables('factoryId'), '/datasets/REF_IncrementalWaterMarkDataset')]",
+                "[concat(variables('factoryId'), '/datasets/SRC_SQLServerSourceDataset')]",
+                "[concat(variables('factoryId'), '/datasets/SNK_AzureSQLIncrementalSinkDataset')]",
+                "[concat(variables('factoryId'), '/linkedServices/AzureSqlDatabaseLinkedService')]",
+                "[concat(variables('factoryId'), '/linkedServices/AzureBlobStorageLinkedService')]"
+            ]
+        },
+        {
+            "name": "[concat(parameters('factoryName'), '/GetTableListAndTriggerCopyData')]",
+            "type": "Microsoft.DataFactory/factories/pipelines",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "activities": [
+                    {
+                        "name": "LookupTablesToCopy",
+                        "type": "Lookup",
+                        "dependsOn": [],
+                        "policy": {
+                            "timeout": "7.00:00:00",
+                            "retry": 0,
+                            "retryIntervalInSeconds": 30,
+                            "secureOutput": false,
+                            "secureInput": false
+                        },
+                        "userProperties": [],
+                        "typeProperties": {
+                            "source": {
+                                "type": "SqlSource",
+                                "sqlReaderQuery": "SELECT TABLE_SCHEMA, TABLE_NAME FROM information_schema.TABLES WHERE TABLE_TYPE = 'BASE TABLE' and TABLE_SCHEMA = 'dbo' and TABLE_NAME IN ('ClaimCode', 'Client', 'Department', 'Entity') "
+                            },
+                            "dataset": {
+                                "referenceName": "SRC_FullSourceDataset",
+                                "type": "DatasetReference",
+                                "parameters": {}
+                            },
+                            "firstRowOnly": false
+                        }
+                    },
+                    {
+                        "name": "InitiateCopy",
+                        "type": "ExecutePipeline",
+                        "dependsOn": [
+                            {
+                                "activity": "LookupTablesToCopy",
+                                "dependencyConditions": [
+                                    "Succeeded"
+                                ]
+                            }
+                        ],
+                        "userProperties": [],
+                        "typeProperties": {
+                            "pipeline": {
+                                "referenceName": "IterateAndCopySQLTables",
+                                "type": "PipelineReference"
+                            },
+                            "parameters": {
+                                "tableList": {
+                                    "value": "@activity('LookupTableList').output.value",
+                                    "type": "Expression"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "folder": {
+                    "name": "Full"
+                },
+                "annotations": [
+                    "Full"
+                ]
+            },
+            "dependsOn": [
+                "[concat(variables('factoryId'), '/datasets/SRC_FullSourceDataset')]",
+                "[concat(variables('factoryId'), '/pipelines/IterateAndCopySQLTables')]"
+            ]
+        },
+        {
+            "name": "[concat(parameters('factoryName'), '/IterateAndCopySQLTables')]",
+            "type": "Microsoft.DataFactory/factories/pipelines",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "activities": [
+                    {
+                        "name": "IterateSQLTables",
+                        "type": "ForEach",
+                        "dependsOn": [],
+                        "userProperties": [],
+                        "typeProperties": {
+                            "items": {
+                                "value": "@pipeline().parameters.tableList",
+                                "type": "Expression"
+                            },
+                            "activities": [
+                                {
+                                    "name": "CopyTableData",
+                                    "type": "Copy",
+                                    "dependsOn": [],
+                                    "policy": {
+                                        "timeout": "7.00:00:00",
+                                        "retry": 0,
+                                        "retryIntervalInSeconds": 30,
+                                        "secureOutput": false,
+                                        "secureInput": false
+                                    },
+                                    "userProperties": [],
+                                    "typeProperties": {
+                                        "source": {
+                                            "type": "SqlSource",
+                                            "sqlReaderQuery": {
+                                                "value": "SELECT * FROM [@{item().TABLE_SCHEMA}].[@{item().TABLE_NAME}]",
+                                                "type": "Expression"
+                                            }
+                                        },
+                                        "sink": {
+                                            "type": "SqlSink",
+                                            "writeBatchSize": 10000,
+                                            "preCopyScript": {
+                                                "value": "TRUNCATE TABLE [@{item().TABLE_SCHEMA}].[@{item().TABLE_NAME}]",
+                                                "type": "Expression"
+                                            }
+                                        },
+                                        "enableStaging": true,
+                                        "stagingSettings": {
+                                            "linkedServiceName": {
+                                                "referenceName": "AzureBlobStorageLinkedService",
+                                                "type": "LinkedServiceReference"
+                                            },
+                                            "path": "epic",
+                                            "enableCompression": true
+                                        },
+                                        "enableSkipIncompatibleRow": true,
+                                        "dataIntegrationUnits": 0
+                                    },
+                                    "inputs": [
+                                        {
+                                            "referenceName": "SRC_FullSourceDataset",
+                                            "type": "DatasetReference",
+                                            "parameters": {}
+                                        }
+                                    ],
+                                    "outputs": [
+                                        {
+                                            "referenceName": "SNK_AzureSqlSinkDataset",
+                                            "type": "DatasetReference",
+                                            "parameters": {
+                                                "DWTableName": "[concat('[', '@{item().TABLE_SCHEMA}].[@{item().TABLE_NAME}]')]"
+                                            }
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                ],
+                "parameters": {
+                    "tableList": {
+                        "type": "Array"
+                    }
+                },
+                "folder": {
+                    "name": "Full"
+                },
+                "annotations": [
+                    "Full"
+                ]
+            },
+            "dependsOn": [
+                "[concat(variables('factoryId'), '/datasets/SRC_FullSourceDataset')]",
+                "[concat(variables('factoryId'), '/datasets/SNK_AzureSqlSinkDataset')]",
+                "[concat(variables('factoryId'), '/linkedServices/AzureBlobStorageLinkedService')]"
+            ]
+        },
+        {
+            "name": "[concat(parameters('factoryName'), '/SNK_AzureSQLIncrementalSinkDataset')]",
+            "type": "Microsoft.DataFactory/factories/datasets",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "linkedServiceName": {
+                    "referenceName": "AzureSqlDatabaseLinkedService",
+                    "type": "LinkedServiceReference"
+                },
+                "parameters": {
+                    "SinkTableName": {
+                        "type": "String"
+                    }
+                },
+                "folder": {
+                    "name": "Incremental"
+                },
+                "annotations": [],
+                "type": "AzureSqlTable",
+                "typeProperties": {
+                    "tableName": {
+                        "value": "@dataset().SinkTableName",
+                        "type": "Expression"
+                    }
+                }
+            },
+            "dependsOn": [
+                "[concat(variables('factoryId'), '/linkedServices/AzureSqlDatabaseLinkedService')]"
+            ]
+        },
+        {
+            "name": "[concat(parameters('factoryName'), '/REF_IncrementalWaterMarkDataset')]",
+            "type": "Microsoft.DataFactory/factories/datasets",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "linkedServiceName": {
+                    "referenceName": "AzureSqlDatabaseLinkedService",
+                    "type": "LinkedServiceReference"
+                },
+                "folder": {
+                    "name": "Incremental"
+                },
+                "annotations": [],
+                "type": "AzureSqlTable",
+                "typeProperties": {
+                    "tableName": "[concat('[', 'SYSTEM].[StageTable]')]"
+                }
+            },
+            "dependsOn": [
+                "[concat(variables('factoryId'), '/linkedServices/AzureSqlDatabaseLinkedService')]"
+            ]
+        },
+        {
+            "name": "[concat(parameters('factoryName'), '/SRC_FullSourceDataset')]",
+            "type": "Microsoft.DataFactory/factories/datasets",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "linkedServiceName": {
+                    "referenceName": "SqlServerLinkedService",
+                    "type": "LinkedServiceReference"
+                },
+                "folder": {
+                    "name": "Full"
+                },
+                "annotations": [
+                    "Full"
+                ],
+                "type": "SqlServerTable",
+                "typeProperties": {
+                    "tableName": "[concat('[', 'dbo].[AALocation]')]"
+                }
+            },
+            "dependsOn": [
+                "[concat(variables('factoryId'), '/linkedServices/SqlServerLinkedService')]"
+            ]
+        },
+        {
+            "name": "[concat(parameters('factoryName'), '/SNK_AzureSqlSinkDataset')]",
+            "type": "Microsoft.DataFactory/factories/datasets",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "linkedServiceName": {
+                    "referenceName": "AzureSqlDatabaseLinkedService",
+                    "type": "LinkedServiceReference"
+                },
+                "parameters": {
+                    "DWTableName": {
+                        "type": "String"
+                    }
+                },
+                "folder": {
+                    "name": "Full"
+                },
+                "annotations": [
+                    "Full"
+                ],
+                "type": "AzureSqlTable",
+                "typeProperties": {
+                    "tableName": {
+                        "value": "@dataset().DWTableName",
+                        "type": "Expression"
+                    }
+                }
+            },
+            "dependsOn": [
+                "[concat(variables('factoryId'), '/linkedServices/AzureSqlDatabaseLinkedService')]"
+            ]
+        },
+        {
+            "name": "[concat(parameters('factoryName'), '/SRC_SQLServerSourceDataset')]",
+            "type": "Microsoft.DataFactory/factories/datasets",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "linkedServiceName": {
+                    "referenceName": "SqlServerLinkedService",
+                    "type": "LinkedServiceReference"
+                },
+                "folder": {
+                    "name": "Incremental"
+                },
+                "annotations": [],
+                "type": "SqlServerTable",
+                "typeProperties": {}
+            },
+            "dependsOn": [
+                "[concat(variables('factoryId'), '/linkedServices/SqlServerLinkedService')]"
+            ]
+        },
+        {
+            "name": "[concat(parameters('factoryName'), '/IREUSubscriber')]",
+            "type": "Microsoft.DataFactory/factories/integrationRuntimes",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "type": "SelfHosted",
+                "typeProperties": {}
+            },
+            "dependsOn": []
+        },
+        {
+            "name": "[concat(parameters('factoryName'), '/SqlServerLinkedService')]",
+            "type": "Microsoft.DataFactory/factories/linkedServices",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "annotations": [],
+                "type": "SqlServer",
+                "typeProperties": {
+                    "connectionString": "[parameters('SqlServerLinkedService_connectionString')]"
+                },
+                "connectVia": {
+                    "referenceName": "IREUSubscriber",
+                    "type": "IntegrationRuntimeReference"
+                }
+            },
+            "dependsOn": [
+                "[concat(variables('factoryId'), '/integrationRuntimes/IREUSubscriber')]"
+            ]
+        },
+        {
+            "name": "[concat(parameters('factoryName'), '/AzureSqlDatabaseLinkedService')]",
+            "type": "Microsoft.DataFactory/factories/linkedServices",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "annotations": [],
+                "type": "AzureSqlDatabase",
+                "typeProperties": {
+                    "connectionString": "[parameters('AzureSqlDatabaseLinkedService_connectionString')]"
+                }
+            },
+            "dependsOn": []
+        },
+        {
+            "name": "[concat(parameters('factoryName'), '/AzureBlobStorageLinkedService')]",
+            "type": "Microsoft.DataFactory/factories/linkedServices",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "annotations": [],
+                "type": "AzureBlobStorage",
+                "typeProperties": {
+                    "connectionString": "[parameters('AzureBlobStorageLinkedService_connectionString')]"
+                }
+            },
+            "dependsOn": []
+        }
+    ]
+}
